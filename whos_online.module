@@ -1,0 +1,380 @@
+<?php
+/* $Id:$ */
+
+define('WHOS_ONLINE_AGENTS_FILE', 'http://www.user-agents.org/allagents.xml');
+define('WHOS_ONLINE_ADDL_FILE', 'agents_addl.txt');
+define('WHOS_ONLINE_MEMCACHE_SERVER', '127.0.0.1');
+define('WHOS_ONLINE_MEMCACHE_PORT', 11211);
+
+/**
+ * Implementation of hook_perm().
+ */
+
+function whos_online_permission() {
+    return array(
+        'view guest users' => array(
+        	'title' => t('See guest users'),
+        	'description' => t('View unlogged-in/guest users')),
+        'view guest users by hostname' => array(
+        	'title' => t('See guest users by hostname'),
+        	'description' => t('View guest users by hostname')),
+        'view bots' => array(
+        	'title' => t('See bot users'),
+        	'description' => t('See bot connections')),
+    );
+}
+
+/**
+ * Implementation of hook_init().
+ */
+function whos_online_init() {
+    global $user;
+//dpr($user, FALSE, 'user');
+
+    if (extension_loaded('memcached')) {
+        $memc = new Memcached();
+        $memc->addServer(WHOS_ONLINE_MEMCACHE_SERVER, WHOS_ONLINE_MEMCACHE_PORT);
+
+        if ($user->uid == 0) {
+            $user_agents = $memc->get('user_agents_' . variable_get('whos_online_cache_id', 'S0001'));
+
+            if ($user_agents === FALSE) {
+                $user_agents = array();
+            }
+
+            // Get the user agent master list.
+            $user_agents_list = $memc->get('user_agents_master_list' );
+
+            if (isset($user_agents[$_SERVER["REMOTE_ADDR"]])) {
+                $user_agents[$_SERVER["REMOTE_ADDR"]]['last_update'] = REQUEST_TIME;
+            }
+            else {
+                $ua = isset($user_agents_list[$_SERVER["HTTP_USER_AGENT"]]) ? $user_agents_list[$_SERVER["HTTP_USER_AGENT"]] : NULL;
+                $hostname = variable_get('whos_online_use_hostname', 0) == 1 ? gethostbyaddr($_SERVER["REMOTE_ADDR"]) : NULL;
+                $user_agents[$_SERVER["REMOTE_ADDR"]] = array('ua' => $ua, 'last_update' => REQUEST_TIME, 'hostname' => $hostname);
+                $memc->set('user_agents_' . variable_get('whos_online_cache_id', 'S0001'), $user_agents);
+            }
+        }
+        else {
+            $registered_users = $memc->get('users_' . variable_get('whos_online_cache_id', 'S0001'));
+            if ($registered_users === FALSE) {
+                $registered_users = array();
+            }
+            $registered_users[$_SERVER["REMOTE_ADDR"]] = array('name' => $user->name, 'last_update' => REQUEST_TIME, 'uid' => $user->uid);
+            $memc->set('users_' . variable_get('whos_online_cache_id', 'S0001'), $registered_users);
+        }
+    }
+}
+
+
+/**
+ * Implementation of hook_menu().
+ */
+function whos_online_menu() {
+	    $items['admin/config/whos_online'] = array(
+        'title'             => "Who's Online",
+        'description'       => "Enhanced Who's Online.",
+        'postion'			=> 'right',
+        'weight'			=> -5,
+        'page callback'     => 'system_admin_menu_block_page',
+        'access arguments'  => array('administer site configuration'),
+        'file'              => 'whos_online_admin.inc',
+ //       'file_path'			=> drupal_get_path('module', 'system'),
+    );
+
+    $items['admin/config/people/whos_online/settings'] = array(
+        'title'             => "Who's Online Settings",
+        'description'       => "Edit Who's Online configuration.",
+        'page callback'     => 'drupal_get_form',
+        'page arguments'    => array('whos_online_admin_settings'),
+        'access arguments'  => array('administer site configuration'),
+        'type'              => MENU_NORMAL_ITEM,
+        'file'              => 'whos_online_admin.inc',
+    );
+
+    return $items;
+}
+
+/**
+ * Implementation of hook_block().
+ *
+ */
+function whos_online_block_info() {
+	$blocks['show_users'] = array(
+		'info'		=> t("Who's online now?"),
+		'cache'		=> DRUPAL_CACHE_PER_ROLE,
+		'status'	=> TRUE,
+		'region'	=> 'sidebar_second',
+	);
+
+	return $blocks;
+}
+
+function whos_online_block_view($delta = '') {
+	$block = array();
+
+	switch ($delta) {
+		case 'show_users':
+			$block['subject'] = t("Users Online");
+			$block['content'] = theme('login_list', array('items' => _whos_online_get_logins()));
+			break;
+	}
+	return $block;
+}
+
+
+function whos_online_theme() {
+	return array (
+		'login_list' => array(
+			'template'	=> 'whos_online_list',
+			'render element'	=> '#data'
+		),
+	);
+}
+
+
+function _whos_online_get_logins() {
+    global $user;
+
+    if (!extension_loaded('memcached')) {
+        drupal_set_message(t('You need to be running <a href="@memcached">APC</a> to use the Who\'s Online module!', array('@memcached' => url('http://php.net/manual/en/book.memcached.php'))), 'error');
+        return;
+    }
+
+    // Connect to Memcached server.
+    $memc = new Memcached();
+    $memc->addServer(WHOS_ONLINE_MEMCACHE_SERVER, WHOS_ONLINE_MEMCACHE_PORT);
+
+    $count_registered = $count_anonymous = $count_bots = 0;
+    $registered_users = array();
+    $guests = array();
+    $bots = array();
+    // Connections expire after X minutes unless refreshed.
+    $cutoff_time = REQUEST_TIME - variable_get('whos_online_sample_secs', 900);
+
+    // Fetch registered users online now.
+    $users = $memc->get('users_' . variable_get('whos_online_cache_id', 'S0001'));
+    if ($users) {
+        foreach ($users as $ip => $data) {
+            if ($data['last_update'] > $cutoff_time) {
+                $count_registered++;
+                $registered_users[] = l($data['name'], 'user/' . $data['uid'], array('html' => TRUE));
+            }
+        }
+    }
+
+    $user_agents = $memc->get('user_agents_' . variable_get('whos_online_cache_id', 'S0001'));
+
+    if ($user_agents) {
+        foreach ($user_agents as $ip => $agent) {
+            if (variable_get('whos_online_exclude_local_anons', 0) == 0 && $ip == $_SERVER["SERVER_ADDR"]) {
+                continue;
+            }
+            if ($agent['last_update'] > $cutoff_time) {
+                if (!empty($agent['ua'])) {
+                    $count_bots++;
+                    if (user_access('view bots', $user) || $user->uid == 1) {
+                        $bots[] = $user->uid == 1 ?
+                                    l($agent['ua'], "admin/config/people/ip-blocking/{$ip}") :
+                                    $agent['ua'];
+                    }
+                }
+                else {
+                    $count_anonymous++;
+                    if (user_access('view guest users', $user) || $user->uid == 1) {
+                        $guests[] = isset($agent['hostname']) && user_access('view guest users by hostname', $user) ?
+                                    $agent['hostname'] : $ip;
+                    }
+                }
+            }
+        }
+    }
+
+	$out = array();
+	$out['#data'] = array();
+
+    // Display registered users.
+    $out['#data']['registered'] = array();
+    $out['#data']['registered']['header'] = format_plural($count_registered, '1 user', '@count users');
+   	$out['#data']['registered']['users'] = array('items' => $registered_users);
+
+    // Display guests.
+    $out['#data']['guests'] = array();
+    $out['#data']['guests']['header'] = format_plural($count_anonymous, '1 user', '@count guests');
+   	$out['#data']['guests']['users'] = array('items' => $guests);
+
+    // Display bots.
+    $out['#data']['bots'] = array();
+    $out['#data']['bots']['header'] = format_plural($count_bots, '1 bot', '@count bots');
+   	$out['#data']['bots']['users'] = array('items' => $bots);
+
+	return $out;
+}
+
+
+/*
+ * Implementation of hook_cron().
+ * This could be problematic.  We use the www.user-agents.org site for
+ * our user agents data but the site has no posted policy on whether or
+ * not automatic client downloading is permissable.
+ *
+ * So we want to cache this data and only hit the site every week or so
+ * for updates.
+ */
+
+function whos_online_cron() {
+    try {
+        if (!extension_loaded('memcached')) {
+            watchdog('whos_online', 'You need to be running <a href="!memcached">APC</a> to use the Who\'s Online module!', array('!memcached' => url('http://php.net/manual/en/book.memcached.php')), WATCHDOG_ERROR);
+            throw new Exception('error');
+        }
+
+        if (variable_get('whos_online_cache_id', '') == '') {
+            watchdog('whos_online', 'Please set the default Memcached cache ID in the block configuration.', array(), WATCHDOG_ERROR);
+            throw new Exception('error');
+        }
+
+        // Refresh the APC image from the user agent files?
+        if (variable_get('whos_online_refresh', 0) == 1) {
+            //apc_delete('user_agents_master_list' );
+            variable_set('whos_online_refresh', 0);
+        }
+
+        // Connect to Memcached server.
+        $memc = new Memcached();
+        $memc->addServer(WHOS_ONLINE_MEMCACHE_SERVER, WHOS_ONLINE_MEMCACHE_PORT);
+
+        // Remove all cached user agents older than our 'whos_online_sample_secs' interval.
+        $user_agents = $memc->get('user_agents_' . variable_get('whos_online_cache_id', ''));
+        $user_agents_out = array();
+        $cutoff_time = REQUEST_TIME - variable_get('whos_online_sample_secs', 900);
+
+        if ($user_agents) {
+            foreach ($user_agents as $ip => $agent) {
+                if ($agent['last_update'] > $cutoff_time) {
+                    $user_agents_out[$ip] = $agent;
+                }
+            }
+            $memc->set('user_agents_' . variable_get('whos_online_cache_id', ''), $user_agents_out);
+        }
+
+        // Remove stale users from cache.
+        $registered_users = $memc->get('users_' . variable_get('whos_online_cache_id', ''));
+        $registered_users_out = array();
+        if ($registered_users) {
+            foreach ($registered_users as $ip => $data) {
+                if ($data['last_update'] > $cutoff_time) {
+                    $registered_users_out[$ip] = $data;
+                }
+            }
+            $memc->set('users_' . variable_get('whos_online_cache_id', ''), $registered_users_out);
+        }
+
+        $user_agents_list = $memc->get('user_agents_master_list');
+        $load_master_file = FALSE;
+        $download_master_file = FALSE;
+        $filename = variable_get('whos_online_agents_file', '__dummy__');
+
+        if ($filename == '__dummy__') {
+            watchdog('whos_online', 'Please set "Path to the user agents file" in the block configuration.', array(), WATCHDOG_ERROR);
+            throw new Exception('error');
+        }
+
+        $agents_dir = dirname($filename);
+
+        if ($user_agents_list === FALSE) {
+            $load_master_file = TRUE;
+
+            if (!file_exists($filename)) {
+                // The user agents master list file is missing.
+                watchdog('whos_online', "The master user agent file wasn't found at %file! Will attempt to download it.", array('%file' => variable_get('whos_online_agents_file', '')), WATCHDOG_NOTICE);
+                $download_master_file = TRUE;
+            }
+        }
+
+        // Check the modification time on agents_addl.txt.  If it's been modified
+        // since the last cron run, reload the agent data.
+        $addl_file = $agents_dir . '/' . WHOS_ONLINE_ADDL_FILE;
+        if (filemtime($addl_file) > variable_get('cron_last', 0)) {
+            $load_master_file = TRUE;
+        }
+
+        // Is it time to refresh the allagents.xml file?
+        $last_download = variable_get('whos_online_last_download', 0);
+        $download_interval = variable_get('whos_online_download_frequency', 0);
+
+        if ($last_download + $download_interval < REQUEST_TIME) {
+            $download_master_file = TRUE;
+        }
+
+        if ($download_master_file) {
+            if ((file_exists($filename) && !is_writable($filename)) || !is_writable($agents_dir)) {
+                watchdog('whos_online', "The master user agent file and/or directories for %file isn't writable by the web server user! Please fix this if you want .", array('%file' => $filename), WATCHDOG_ERROR);
+                throw new Exception('error');
+            }
+
+            $rc = copy(WHOS_ONLINE_AGENTS_FILE, $filename);
+
+            if ($rc === FALSE) {
+                watchdog('whos_online', "There was a problem downloading the master user agent file at %file isn't writable by the web server user! Please fix this if you want .", array('%file' => $filename), WATCHDOG_ERROR);
+                throw new Exception('error');
+            }
+            watchdog('whos_online', "User agent master file %file downloaded successfully.", array('%file' => WHOS_ONLINE_AGENTS_FILE), WATCHDOG_NOTICE);
+            variable_set('whos_online_last_download', REQUEST_TIME);
+        }
+//$load_master_file=true;
+        if ($load_master_file) {
+            $xml = simplexml_load_file($filename);
+
+            if ($xml === FALSE) {
+                watchdog('whos_online', "User agent master file download %file failed!", array('%file' => WHOS_ONLINE_AGENTS_FILE), WATCHDOG_ERROR);
+                throw new Exception('error');
+            }
+
+            $agents_list = array();
+
+            foreach ($xml as $agent) {
+                /*
+                 * We're only interested in a few agent types.  This is the full list.
+                 * B = Browser
+                 * C = Link-, bookmark-, server- checking
+                 * D = Downloading tool
+                 * P = Proxy server, web filtering
+                 * R = Robot, crawler, spider
+                 * S = Spam or bad bot
+                 */
+                if (strpbrk($agent->Type, 'DRS') && $agent->Comment != 'Site is dead') {
+                    $description = (string)$agent->Description;
+                    if (($pos = strpos($description, '(')) !== FALSE) {
+                        $description = substr($description, 0, $pos-1);
+                    }
+                    $agents_list[(string)$agent->String] = $description;
+                }
+            }
+
+            // Now add our local user agent headers, if they exist.
+            if (file_exists($addl_file) && is_readable($addl_file)) {
+                // This is a ^|^ delimited file.
+                $fd = @fopen($addl_file, "r");
+                if ($fd) {
+                    while (!feof($fd)) {
+                        $line = fgets($fd, 4096);
+                        list($header, $description) = explode('^|^', trim($line));
+                        if (!empty($header) && !empty($description)) {
+                            $agents_list[$header] = $description;
+                        }
+                    }
+                    fclose($fd);
+                }
+            }
+
+            $memc->set('user_agents_master_list' , $agents_list);
+
+            watchdog('whos_online', "User agent master file %file refreshed successfully.", array('%file' => WHOS_ONLINE_AGENTS_FILE), WATCHDOG_NOTICE);
+        }
+    }
+    catch (Exception $e) {
+        drupal_set_message(t('There are errors in your cron job. Please see your <a href="@url">status logs</a> for details.', array('@url' => url('admin/reports/dblog'))), 'error');
+    }
+}
+

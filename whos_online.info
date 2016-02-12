@@ -1,0 +1,13 @@
+; $Id: whos_online.info 258 2009-01-15 15:41:12Z root $
+name = Whos Online Now
+description = "Expanded Who's Online block"
+package = Other
+core = 7.x
+php = 5.2
+files[] = whos_online.module
+files[] = whos_online.install
+files[] = whos_online_admin.inc
+files[] = whos_online.js
+scripts[] = whos_online.js
+stylesheets[all][] = whos_online.css
+configure=admin/settings/whos_online

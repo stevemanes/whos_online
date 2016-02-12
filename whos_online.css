@@ -1,0 +1,26 @@
+/* $Id: whos_online.css 258 2009-01-15 15:41:12Z root $ */
+.whos_online {
+    margin: 0px;
+    padding: 0px;
+}
+
+#users_header, #guests_header, #bots_header {
+    padding: 5px 10px;
+    cursor: pointer;
+    position: relative;
+    background-color:transparent;
+    margin:1px;
+    font-weight: bold;
+    border: 1px solid #666;
+}
+.header_expanded {
+    background: url(menu-expanded.png) no-repeat  left center; /* LTR */
+}
+.header_collapsed {
+    background: url(menu-collapsed.png) no-repeat  left center; /* LTR */
+}
+#users_body, #guests_body, #bots_body {
+    /*width: 100px;*/
+    padding: 5px 10px 5px;
+    background-color: transparent;
+}

@@ -1,0 +1,19 @@
+<?php
+/**
+* @file
+* Install function for Who's Online.
+*
+*/
+
+/**
+ * Implementation of hook_install().
+ *
+ * All we do here is confirm that APC is running and
+ * spit an error message if it isn't.
+ */
+
+function whos_online_install() {
+    if (!extension_loaded('memcached')) {
+        drupal_set_message(st('You need to be running <a href="@memcached">APC</a> to use the Who\'s Online module!', array('@memcached' => url('http://php.net/manual/en/book.memcached.php'))), 'error');
+    }
+}
