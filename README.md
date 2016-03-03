@@ -32,7 +32,7 @@ database query per page.
 The bot list is downloaded periodically from http://www.user-agents.org, the
 most complete internet list of bots, spiders and browser user agents.
 
-Jquery drives the block display.
+jQuery drives the block display.
 
 Knowing which bots hit your site and how often can help you identify misbehaving
 spiders and spam bots which are sucking unnecessary bandwidth.  Ideally, this
