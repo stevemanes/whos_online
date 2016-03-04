@@ -7,16 +7,10 @@ the stock Who's Online block.
 
 Dependencies
 ------------
-This module has two critical dependencies.  Don't even think about installing
-it unless you are running the following on your web server:
+This module requires that Memcached and its PHP extension are installed and
+working. It also requires a properly configured cron tasker.
 
-* PHP 5.2 or later,
-
-* Memcached.
-
-* A properly configured cron tasker.
-
-THIS MODULE WILL NOT WORK WITHOUT THEM!
+THIS MODULE WILL NOT WORK WITHOUT THIS!
 
 Overview
 --------
@@ -77,10 +71,9 @@ Installing the Who's Online Now module is simple:
 
 No database update is needed.
 
-WARNING: be aware that enabling hostname display can be costly.  The web server
-has to make a DNS request for each new connection.  The hostname is cached so
-this is only done once for the user.  However on a very busy site this could be
-a moderate performance bottleneck.
+WARNING: be aware that enabling hostname display can be costly. While the hostname
+is cached the web server has to make a DNS request for each new connection. However
+on a very busy site this could be a moderate performance bottleneck.
 
 If you are only running one Drupal site on your web server you can use the
 default "Memcached ID".  Otherwise, each site should be assigned a unique
